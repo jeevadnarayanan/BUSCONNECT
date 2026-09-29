@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch a location</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,sans-serif}
+  #top{padding:10px;background:#f6f7f9;display:flex;gap:8px;align-items:center}
+  select,button{font-size:1rem;padding:10px;border-radius:8px;border:1px solid #c5cad1}
+  select{flex:1}
+  button{background:#1b6e4f;color:#fff;border:0}
+  #info{padding:6px 10px;font-size:.9rem;background:#e8ebef}
+  #map{height:calc(100% - 100px)}
+</style>
+</head>
+<body>
+<div id="top">
+  <select id="people"><option value="">Choose who to watch...</option></select>
+  <button id="refresh">Refresh</button>
+</div>
+<div id="info">Pick a person who is sharing.</div>
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ====== PASTE YOUR VALUES HERE ======
+const SUPABASE_URL = "PASTE_PROJECT_URL";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tZXVvanZlbXN2Y3J2c21tZGdtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA2ODU3NzQsImV4cCI6MjEwNjI2MTc3NH0.ri_DyD_NPdLB2Fds1I8T0uOOJjzUF0G0NcfasuJ0p6c";
+// ====================================
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = id => document.getElementById(id);
+
+const map = L.map("map").setView([10.85, 76.27], 8);   // Kerala
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"
+}).addTo(map);
+let marker = null, firstFix = true, timer = null;
+
+async function loadPeople(){
+  const { data, error } = await db.from("locations").select("username").eq("sharing", true).order("username");
+  if(error) return $("info").textContent = "Error: " + error.message;
+  const keep = $("people").value;
+  $("people").innerHTML = '<option value="">Choose who to watch...</option>' +
+    data.map(r => `<option value="${r.username}">${r.username}</option>`).join("");
+  $("people").value = keep;
+  if(!data.length) $("info").textContent = "Nobody is sharing right now.";
+}
+
+async function poll(){
+  const name = $("people").value;
+  if(!name) return;
+  const { data, error } = await db.from("locations").select("lat,lng,sharing,updated_at").eq("username", name).maybeSingle();
+  if(error || !data) return $("info").textContent = "Could not load " + name;
+  if(!data.sharing){ $("info").textContent = name + " stopped sharing."; return; }
+  const ago = Math.round((Date.now() - new Date(data.updated_at)) / 1000);
+  $("info").textContent = `${name}: updated ${ago}s ago`;
+  const pos = [data.lat, data.lng];
+  if(!marker) marker = L.marker(pos).addTo(map); else marker.setLatLng(pos);
+  if(firstFix){ map.setView(pos, 16); firstFix = false; }
+}
+
+$("people").onchange = () => {
+  firstFix = true;
+  if(marker){ map.removeLayer(marker); marker = null; }
+  clearInterval(timer);
+  if($("people").value){ poll(); timer = setInterval(poll, 3000); }   // check every 3 seconds
+};
+$("refresh").onclick = loadPeople;
+loadPeople();
+setInterval(loadPeople, 15000);
+</script>
+</body>
+</html>

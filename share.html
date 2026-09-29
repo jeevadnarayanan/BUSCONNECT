@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Share my location</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:420px;margin:0 auto;padding:20px;background:#f6f7f9;color:#1a1d21}
+  h1{font-size:1.3rem;margin:0 0 16px}
+  input,button{width:100%;box-sizing:border-box;font-size:1rem;padding:12px;margin:6px 0;border-radius:8px;border:1px solid #c5cad1}
+  button{background:#1b6e4f;color:#fff;border:0;font-weight:600}
+  button.alt{background:#fff;color:#1b6e4f;border:1px solid #1b6e4f}
+  button.stop{background:#b3261e}
+  #status{margin-top:14px;padding:10px;border-radius:8px;background:#e8ebef;font-size:.95rem;white-space:pre-line}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<h1>Share my location</h1>
+
+<div id="authBox">
+  <input id="username" placeholder="Username (letters/numbers)" autocapitalize="none">
+  <input id="password" type="password" placeholder="Password (6+ characters)">
+  <button id="loginBtn">Log in</button>
+  <button id="signupBtn" class="alt">Create account</button>
+</div>
+
+<div id="appBox" class="hide">
+  <p>Logged in as <b id="who"></b></p>
+  <button id="startBtn">Start sharing</button>
+  <button id="stopBtn" class="stop hide">Stop sharing</button>
+  <button id="logoutBtn" class="alt">Log out</button>
+</div>
+
+<div id="status">Not sharing.</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ====== PASTE YOUR VALUES HERE ======
+const SUPABASE_URL = "PASTE_PROJECT_URL";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tZXVvanZlbXN2Y3J2c21tZGdtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA2ODU3NzQsImV4cCI6MjEwNjI2MTc3NH0.ri_DyD_NPdLB2Fds1I8T0uOOJjzUF0G0NcfasuJ0p6c";
+// ====================================
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = id => document.getElementById(id);
+const say = t => $("status").textContent = t;
+const toEmail = u => u.trim().toLowerCase() + "@vazhi-app.com"; // username -> fake email
+
+let me = null, username = "", watchId = null, wakeLock = null, lastSent = 0, sent = 0;
+
+async function showApp(user){
+  me = user;
+  const { data } = await db.from("locations").select("username").eq("user_id", user.id).maybeSingle();
+  username = data ? data.username : (user.email.split("@")[0]);
+  $("who").textContent = username;
+  $("authBox").classList.add("hide");
+  $("appBox").classList.remove("hide");
+}
+
+$("signupBtn").onclick = async () => {
+  const u = $("username").value.trim().toLowerCase(), p = $("password").value;
+  if(!/^[a-z0-9]{3,20}$/.test(u)) return say("Username: 3-20 letters/numbers only.");
+  const { data, error } = await db.auth.signUp({ email: toEmail(u), password: p });
+  if(error) return say("Sign up failed: " + error.message);
+  if(!data.session) return say("Account made, but email confirmation is still ON in Supabase. Turn it off (see setup step) and log in.");
+  const { error: e2 } = await db.from("locations").insert({ user_id: data.user.id, username: u });
+  if(e2) return say("Could not save username (taken?): " + e2.message);
+  showApp(data.user); say("Account created. Tap Start sharing.");
+};
+
+$("loginBtn").onclick = async () => {
+  const u = $("username").value.trim().toLowerCase(), p = $("password").value;
+  const { data, error } = await db.auth.signInWithPassword({ email: toEmail(u), password: p });
+  if(error) return say("Log in failed: " + error.message);
+  showApp(data.user); say("Logged in. Tap Start sharing.");
+};
+
+$("logoutBtn").onclick = async () => { await stopSharing(); await db.auth.signOut(); location.reload(); };
+
+async function push(lat, lng){
+  const { error } = await db.from("locations").update({ lat, lng, sharing: true, updated_at: new Date().toISOString() }).eq("user_id", me.id);
+  if(error) say("Send failed: " + error.message); else { sent++; say(`Sharing live.\nLast: ${lat.toFixed(5)}, ${lng.toFixed(5)}\nUpdates sent: ${sent}\nKeep this screen on.`); }
+}
+
+$("startBtn").onclick = async () => {
+  if(!navigator.geolocation) return say("This browser has no GPS support.");
+  try{ if("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); }catch(e){}
+  say("Waiting for GPS... allow location permission.");
+  watchId = navigator.geolocation.watchPosition(pos => {
+    const now = Date.now();
+    if(now - lastSent < 5000) return;          // send at most every 5 seconds
+    lastSent = now;
+    push(pos.coords.latitude, pos.coords.longitude);
+  }, err => say("GPS error: " + err.message), { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+  $("startBtn").classList.add("hide"); $("stopBtn").classList.remove("hide");
+};
+
+async function stopSharing(){
+  if(watchId !== null){ navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if(wakeLock){ try{ await wakeLock.release(); }catch(e){} wakeLock = null; }
+  if(me) await db.from("locations").update({ sharing: false }).eq("user_id", me.id);
+}
+$("stopBtn").onclick = async () => {
+  await stopSharing();
+  $("stopBtn").classList.add("hide"); $("startBtn").classList.remove("hide");
+  say("Stopped. You are no longer visible.");
+};
+
+db.auth.getSession().then(({ data }) => { if(data.session) showApp(data.session.user); });
+</script>
+</body>
+</html>
