@@ -50,8 +50,13 @@ let me = null, username = "", watchId = null, wakeLock = null, lastSent = 0, sen
 
 async function showApp(user){
   me = user;
-  const { data } = await db.from("locations").select("username").eq("user_id", user.id).maybeSingle();
-  username = data ? data.username : (user.email.split("@")[0]);
+  let { data } = await db.from("locations").select("username").eq("user_id", user.id).maybeSingle();
+  if(!data){
+    const name = user.email.split("@")[0];
+    await db.from("locations").insert({ user_id: user.id, username: name });
+    data = { username: name };
+  }
+  username = data.username;
   $("who").textContent = username;
   $("authBox").classList.add("hide");
   $("appBox").classList.remove("hide");
