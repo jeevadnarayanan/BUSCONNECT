@@ -92,6 +92,8 @@ $("startBtn").onclick = async () => {
   try{ if("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); }catch(e){}
   say("Waiting for GPS... allow location permission.");
   watchId = navigator.geolocation.watchPosition(pos => {
+    const acc = Math.round(pos.coords.accuracy);
+    if(acc > 30){ say(`Waiting for a better GPS fix...\nCurrent accuracy: ±${acc} m (need ±30 m or better)`); return; }
     const now = Date.now();
     if(now - lastSent < 5000) return;          // send at most every 5 seconds
     lastSent = now;
