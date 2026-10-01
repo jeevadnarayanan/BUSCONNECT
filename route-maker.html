@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Route maker</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,sans-serif}
+  #bar{padding:8px;background:#f6f7f9;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  button,input{font-size:1rem;padding:9px;border-radius:8px;border:1px solid #c5cad1}
+  button{background:#1b6e4f;color:#fff;border:0}
+  button.alt{background:#fff;color:#1b6e4f;border:1px solid #1b6e4f}
+  #msg{padding:6px 10px;background:#e8ebef;font-size:.9rem}
+  #map{height:calc(100% - 175px)}
+  #sql{width:100%;height:60px;box-sizing:border-box;font-family:monospace;font-size:.75rem}
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="undo" class="alt">Undo</button>
+  <button id="clear" class="alt">Clear</button>
+  <button id="build">Build road route</button>
+  <input id="name" placeholder="Route name" style="flex:1;min-width:120px">
+  <button id="copy">Copy SQL</button>
+</div>
+<div id="msg">Click the map to add waypoints along the bus route (start, a few in between, end). Then press Build.</div>
+<div id="map"></div>
+<textarea id="sql" placeholder="SQL appears here after you press Copy SQL"></textarea>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const map = L.map("map").setView([10.85, 76.27], 9);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:19, attribution:"&copy; OpenStreetMap contributors"}).addTo(map);
+
+let wps = [], markers = [], line = null, points = null;
+
+map.on("click", e => {
+  wps.push([e.latlng.lat, e.latlng.lng]);
+  markers.push(L.circleMarker(e.latlng, {radius:6, color:"#b3261e"}).addTo(map));
+  $("msg").textContent = wps.length + " waypoints. Press Build when done.";
+});
+$("undo").onclick = () => { wps.pop(); const m = markers.pop(); if(m) map.removeLayer(m); };
+$("clear").onclick = () => { wps = []; markers.forEach(m => map.removeLayer(m)); markers = []; if(line) map.removeLayer(line); line = null; points = null; $("sql").value = ""; };
+
+$("build").onclick = async () => {
+  if(wps.length < 2) return $("msg").textContent = "Add at least 2 waypoints.";
+  $("msg").textContent = "Building route along roads...";
+  const coords = wps.map(p => p[1] + "," + p[0]).join(";");
+  try{
+    const r = await fetch("https://router.project-osrm.org/route/v1/driving/" + coords + "?overview=full&geometries=geojson");
+    const j = await r.json();
+    if(j.code !== "Ok") throw new Error(j.code);
+    points = j.routes[0].geometry.coordinates.map(c => [+c[1].toFixed(6), +c[0].toFixed(6)]);
+    $("msg").textContent = "Road route built: " + points.length + " points, " + Math.round(j.routes[0].distance/100)/10 + " km. Check it follows the real bus road.";
+  }catch(e){
+    points = wps.map(p => [+p[0].toFixed(6), +p[1].toFixed(6)]);
+    $("msg").textContent = "Road service failed (" + e.message + "). Using your clicked points as straight lines instead.";
+  }
+  if(line) map.removeLayer(line);
+  line = L.polyline(points, {color:"#1b6e4f", weight:5}).addTo(map);
+  map.fitBounds(line.getBounds());
+};
+
+$("copy").onclick = async () => {
+  const name = $("name").value.trim();
+  if(!points) return $("msg").textContent = "Build the route first.";
+  if(!name) return $("msg").textContent = "Type a route name first.";
+  const sql = "insert into routes (name, points) values ('" + name.replace(/'/g, "''") + "', '" + JSON.stringify(points) + "'::jsonb);";
+  $("sql").value = sql;
+  try{ await navigator.clipboard.writeText(sql); $("msg").textContent = "SQL copied. Paste it in Supabase SQL Editor and Run."; }
+  catch(e){ $("sql").select(); $("msg").textContent = "Select-all in the box below and copy it manually."; }
+};
+</script>
+</body>
+</html>
